@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tal-tech/go-zero/core/mathx"
+	"github.com/zeromicro/go-zero/core/mathx"
 )
 
 const (
@@ -42,7 +42,7 @@ func TestConsistentHash(t *testing.T) {
 		keys[key.(string)]++
 	}
 
-	mi := make(map[interface{}]int, len(keys))
+	mi := make(map[any]int, len(keys))
 	for k, v := range keys {
 		mi[k] = v
 	}
@@ -74,33 +74,28 @@ func TestConsistentHashIncrementalTransfer(t *testing.T) {
 		laterCh := create()
 		laterCh.AddWithWeight(node, 10*(i+1))
 
-		for i := 0; i < requestSize; i++ {
-			key, ok := laterCh.Get(requestSize + i)
+		for j := 0; j < requestSize; j++ {
+			key, ok := laterCh.Get(requestSize + j)
 			assert.True(t, ok)
 			assert.NotNil(t, key)
 			value := key.(string)
-			assert.True(t, value == keys[i] || value == node)
+			assert.True(t, value == keys[j] || value == node)
 		}
 	}
 }
 
 func TestConsistentHashTransferOnFailure(t *testing.T) {
 	index := 41
-	keys, newKeys := getKeysBeforeAndAfterFailure(t, "localhost:", index)
-	var transferred int
-	for k, v := range newKeys {
-		if v != keys[k] {
-			transferred++
-		}
-	}
-
-	ratio := float32(transferred) / float32(requestSize)
-	assert.True(t, ratio < 2.5/float32(keySize), fmt.Sprintf("%d: %f", index, ratio))
+	ratioNotExists := getTransferRatioOnFailure(t, index)
+	assert.True(t, ratioNotExists == 0, fmt.Sprintf("%d: %f", index, ratioNotExists))
+	index = 13
+	ratio := getTransferRatioOnFailure(t, index)
+	assert.True(t, ratio < 2.5/keySize, fmt.Sprintf("%d: %f", index, ratio))
 }
 
 func TestConsistentHashLeastTransferOnFailure(t *testing.T) {
 	prefix := "localhost:"
-	index := 41
+	index := 13
 	keys, newKeys := getKeysBeforeAndAfterFailure(t, prefix, index)
 	for k, v := range keys {
 		newV := newKeys[k]
@@ -162,6 +157,17 @@ func getKeysBeforeAndAfterFailure(t *testing.T, prefix string, index int) (map[i
 	}
 
 	return keys, newKeys
+}
+
+func getTransferRatioOnFailure(t *testing.T, index int) float32 {
+	keys, newKeys := getKeysBeforeAndAfterFailure(t, "localhost:", index)
+	var transferred int
+	for k, v := range newKeys {
+		if v != keys[k] {
+			transferred++
+		}
+	}
+	return float32(transferred) / float32(requestSize)
 }
 
 type mockNode struct {

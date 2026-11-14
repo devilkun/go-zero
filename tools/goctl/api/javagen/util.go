@@ -6,14 +6,15 @@ import (
 	"io"
 	"strings"
 
-	"github.com/tal-tech/go-zero/tools/goctl/api/spec"
-	"github.com/tal-tech/go-zero/tools/goctl/util"
+	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+	"github.com/zeromicro/go-zero/tools/goctl/util"
+	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
 )
 
 func writeProperty(writer io.Writer, member spec.Member, indent int) error {
 	if len(member.Comment) > 0 {
 		writeIndent(writer, indent)
-		fmt.Fprint(writer, member.Comment+util.NL)
+		fmt.Fprint(writer, member.Comment+pathx.NL)
 	}
 	writeIndent(writer, indent)
 	ty, err := specTypeToJava(member.Type)
@@ -133,7 +134,7 @@ func primitiveType(tp string) (string, bool) {
 		return "String", true
 	case "int64", "uint64":
 		return "long", true
-	case "int", "int8", "int32", "uint", "uint8", "uint16", "uint32":
+	case "int", "int8", "int16", "int32", "uint", "uint8", "uint16", "uint32":
 		return "int", true
 	case "float", "float32":
 		return "float", true

@@ -3,7 +3,15 @@
 # generate model with cache from ddl
 fromDDLWithCache:
 	goctl template clean
-	goctl model mysql ddl -src="./sql/*.sql" -dir="./sql/model/cache" -cache
+	goctl model mysql ddl -src="./sql/*.sql" -dir="./sql/model/cache" -cache --prefix gozero
+
+fromDDLWithCacheAndIgnoreColumns:
+	goctl template clean
+	goctl model mysql ddl -src="./sql/*.sql" -dir="./sql/model/ignore_columns/cache" -cache -i 'gmt_create,create_at' -i 'gmt_modified,update_at' --prefix gozero
+
+fromDDLWithCacheAndDb:
+	goctl template clean
+	goctl model mysql ddl -src="./sql/*.sql" -dir="./sql/model/cache_db" -database="1gozero" -cache --prefix gozero
 
 fromDDLWithoutCache:
 	goctl template clean;

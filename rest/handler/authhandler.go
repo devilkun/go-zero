@@ -1,16 +1,17 @@
 package handler
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
-	"net"
+	"io"
 	"net/http"
 	"net/http/httputil"
 
-	"github.com/dgrijalva/jwt-go"
-	"github.com/tal-tech/go-zero/core/logx"
-	"github.com/tal-tech/go-zero/rest/token"
+	"github.com/golang-jwt/jwt/v4"
+	"github.com/zeromicro/go-zero/core/logc"
+	"github.com/zeromicro/go-zero/rest/internal/response"
+	"github.com/zeromicro/go-zero/rest/token"
 )
 
 const (
@@ -30,7 +31,7 @@ var (
 )
 
 type (
-	// A AuthorizeOptions is authorize options.
+	// An AuthorizeOptions is authorize options.
 	AuthorizeOptions struct {
 		PrevSecret string
 		Callback   UnauthorizedCallback
@@ -42,7 +43,7 @@ type (
 	AuthorizeOption func(opts *AuthorizeOptions)
 )
 
-// Authorize returns an authorize middleware.
+// Authorize returns an authorization middleware.
 func Authorize(secret string, opts ...AuthorizeOption) func(http.Handler) http.Handler {
 	var authOpts AuthorizeOptions
 	for _, opt := range opts {
@@ -99,66 +100,45 @@ func WithUnauthorizedCallback(callback UnauthorizedCallback) AuthorizeOption {
 }
 
 func detailAuthLog(r *http.Request, reason string) {
+	// Cap the body read for the dump so that an attacker cannot force the
+	// server to fully read/decompress (e.g. a gzip-encoded) request body
+	// just by failing authentication. See GHSA-h4vj-585c-2r8x.
+	if r.Body != nil {
+		body := r.Body
+		var prefix bytes.Buffer
+		r.Body = io.NopCloser(io.LimitReader(io.TeeReader(body, &prefix), limitDetailedBodyBytes))
+		// Replay only the bytes consumed for logging, then continue reading the
+		// original body so unauthorized callbacks can still read the full request.
+		defer func() {
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{
+				Reader: io.MultiReader(&prefix, body),
+				Closer: body,
+			}
+		}()
+	}
+
 	// discard dump error, only for debug purpose
 	details, _ := httputil.DumpRequest(r, true)
-	logx.Errorf("authorize failed: %s\n=> %+v", reason, string(details))
+	logc.Errorf(r.Context(), "authorize failed: %s\n=> %+v", reason, string(details))
 }
 
 func unauthorized(w http.ResponseWriter, r *http.Request, err error, callback UnauthorizedCallback) {
-	writer := newGuardedResponseWriter(w)
+	writer := response.NewHeaderOnceResponseWriter(w)
 
 	if err != nil {
 		detailAuthLog(r, err.Error())
 	} else {
 		detailAuthLog(r, noDetailReason)
 	}
+
+	// let callback go first, to make sure we respond with user-defined HTTP header
 	if callback != nil {
 		callback(writer, r, err)
 	}
 
+	// if user not setting HTTP header, we set header with 401
 	writer.WriteHeader(http.StatusUnauthorized)
-}
-
-type guardedResponseWriter struct {
-	writer      http.ResponseWriter
-	wroteHeader bool
-}
-
-func newGuardedResponseWriter(w http.ResponseWriter) *guardedResponseWriter {
-	return &guardedResponseWriter{
-		writer: w,
-	}
-}
-
-func (grw *guardedResponseWriter) Flush() {
-	if flusher, ok := grw.writer.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-func (grw *guardedResponseWriter) Header() http.Header {
-	return grw.writer.Header()
-}
-
-// Hijack implements the http.Hijacker interface.
-// This expands the Response to fulfill http.Hijacker if the underlying http.ResponseWriter supports it.
-func (grw *guardedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hijacked, ok := grw.writer.(http.Hijacker); ok {
-		return hijacked.Hijack()
-	}
-
-	return nil, nil, errors.New("server doesn't support hijacking")
-}
-
-func (grw *guardedResponseWriter) Write(body []byte) (int, error) {
-	return grw.writer.Write(body)
-}
-
-func (grw *guardedResponseWriter) WriteHeader(statusCode int) {
-	if grw.wroteHeader {
-		return
-	}
-
-	grw.wroteHeader = true
-	grw.writer.WriteHeader(statusCode)
 }

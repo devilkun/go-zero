@@ -557,7 +557,7 @@ service foo-api{
 
 ## 隐藏通道
 
-隐藏通道目前主要为空百符号，换行符号以及注释，这里我们只说注释，因为空白符号和换行符号我们目前拿来也无用。
+隐藏通道目前主要为空白符号，换行符号以及注释，这里我们只说注释，因为空白符号和换行符号我们目前拿来也无用。
 
 ### 单行注释
 
@@ -639,7 +639,7 @@ line comments
 以下为对应语法块解析后细带doc和comment的写法
 ``` api
 // syntaxLit doc
-syntax = "v1" // syntaxLit commnet
+syntax = "v1" // syntaxLit comment
 
 info(
   // kvLit doc

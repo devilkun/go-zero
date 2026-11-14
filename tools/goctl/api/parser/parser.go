@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"unicode"
 
-	"github.com/tal-tech/go-zero/tools/goctl/api/parser/g4/ast"
-	"github.com/tal-tech/go-zero/tools/goctl/api/parser/g4/gen/api"
-	"github.com/tal-tech/go-zero/tools/goctl/api/spec"
+	"github.com/zeromicro/go-zero/tools/goctl/api/parser/g4/ast"
+	"github.com/zeromicro/go-zero/tools/goctl/api/parser/g4/gen/api"
+	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+	"github.com/zeromicro/go-zero/tools/goctl/pkg/env"
+	apiParser "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/parser"
 )
 
 type parser struct {
@@ -15,40 +17,64 @@ type parser struct {
 	spec *spec.ApiSpec
 }
 
-// Parse parses the api file
+// Parse parses the api file.
+// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+// it will be removed in the future.
 func Parse(filename string) (*spec.ApiSpec, error) {
-	astParser := ast.NewParser(ast.WithParserPrefix(filepath.Base(filename)))
-	ast, err := astParser.Parse(filename)
+	if env.UseExperimental() {
+		return apiParser.Parse(filename, "")
+	}
+
+	astParser := ast.NewParser(ast.WithParserPrefix(filepath.Base(filename)), ast.WithParserDebug())
+	parsedApi, err := astParser.Parse(filename)
 	if err != nil {
 		return nil, err
 	}
 
-	spec := new(spec.ApiSpec)
-	p := parser{ast: ast, spec: spec}
+	apiSpec := new(spec.ApiSpec)
+	p := parser{ast: parsedApi, spec: apiSpec}
 	err = p.convert2Spec()
 	if err != nil {
 		return nil, err
 	}
 
-	return spec, nil
+	return apiSpec, nil
 }
 
-// ParseContent parses the api content
-func ParseContent(content string) (*spec.ApiSpec, error) {
-	astParser := ast.NewParser()
-	ast, err := astParser.ParseContent(content)
+func parseContent(content string, skipCheckTypeDeclaration bool, filename ...string) (*spec.ApiSpec, error) {
+	var astParser *ast.Parser
+	if skipCheckTypeDeclaration {
+		astParser = ast.NewParser(ast.WithParserSkipCheckTypeDeclaration())
+	} else {
+		astParser = ast.NewParser()
+	}
+	parsedApi, err := astParser.ParseContent(content, filename...)
 	if err != nil {
 		return nil, err
 	}
 
-	spec := new(spec.ApiSpec)
-	p := parser{ast: ast, spec: spec}
+	apiSpec := new(spec.ApiSpec)
+	p := parser{ast: parsedApi, spec: apiSpec}
 	err = p.convert2Spec()
 	if err != nil {
 		return nil, err
 	}
 
-	return spec, nil
+	return apiSpec, nil
+}
+
+// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+// it will be removed in the future.
+// ParseContent parses the api content
+func ParseContent(content string, filename ...string) (*spec.ApiSpec, error) {
+	return parseContent(content, false, filename...)
+}
+
+// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+// it will be removed in the future.
+// ParseContentWithParserSkipCheckTypeDeclaration parses the api content with skip check type declaration
+func ParseContentWithParserSkipCheckTypeDeclaration(content string, filename ...string) (*spec.ApiSpec, error) {
+	return parseContent(content, true, filename...)
 }
 
 func (p parser) convert2Spec() error {
@@ -64,9 +90,8 @@ func (p parser) convert2Spec() error {
 }
 
 func (p parser) fillInfo() {
-	properties := make(map[string]string, 0)
+	properties := make(map[string]string)
 	if p.ast.Info != nil {
-		p.spec.Info = spec.Info{}
 		for _, kv := range p.ast.Info.Kvs {
 			properties[kv.Key.Text()] = kv.Value.Text()
 		}
@@ -76,14 +101,22 @@ func (p parser) fillInfo() {
 
 func (p parser) fillSyntax() {
 	if p.ast.Syntax != nil {
-		p.spec.Syntax = spec.ApiSyntax{Version: p.ast.Syntax.Version.Text()}
+		p.spec.Syntax = spec.ApiSyntax{
+			Version: p.ast.Syntax.Version.Text(),
+			Doc:     p.stringExprs(p.ast.Syntax.DocExpr),
+			Comment: p.stringExprs([]ast.Expr{p.ast.Syntax.CommentExpr}),
+		}
 	}
 }
 
 func (p parser) fillImport() {
 	if len(p.ast.Import) > 0 {
 		for _, item := range p.ast.Import {
-			p.spec.Imports = append(p.spec.Imports, spec.Import{Value: item.Value.Text()})
+			p.spec.Imports = append(p.spec.Imports, spec.Import{
+				Value:   item.Value.Text(),
+				Doc:     p.stringExprs(item.DocExpr),
+				Comment: p.stringExprs([]ast.Expr{item.CommentExpr}),
+			})
 		}
 	}
 }
@@ -92,7 +125,7 @@ func (p parser) fillTypes() error {
 	for _, item := range p.ast.Type {
 		switch v := (item).(type) {
 		case *ast.TypeStruct:
-			var members []spec.Member
+			members := make([]spec.Member, 0, len(v.Fields))
 			for _, item := range v.Fields {
 				members = append(members, p.fieldToMember(item))
 			}
@@ -112,6 +145,17 @@ func (p parser) fillTypes() error {
 		case spec.DefineStruct:
 			var members []spec.Member
 			for _, member := range v.Members {
+				if member.IsInline {
+					tp, err := p.resolveInlineType(member.Type, map[string]bool{v.RawName: true})
+					if err != nil {
+						return err
+					}
+
+					member.Type = tp
+					members = append(members, member)
+					continue
+				}
+
 				switch v := member.Type.(type) {
 				case spec.DefineStruct:
 					tp, err := p.findDefinedType(v.RawName)
@@ -134,6 +178,62 @@ func (p parser) fillTypes() error {
 	return nil
 }
 
+func (p parser) resolveInlineType(tp spec.Type, resolving map[string]bool) (spec.Type, error) {
+	switch v := tp.(type) {
+	case spec.DefineStruct:
+		if resolving[v.RawName] {
+			return v, nil
+		}
+
+		tp, err := p.findDefinedType(v.RawName)
+		if err != nil {
+			return nil, err
+		}
+
+		defined, ok := (*tp).(spec.DefineStruct)
+		if !ok {
+			return nil, fmt.Errorf("type %s is not a struct", v.RawName)
+		}
+
+		resolving[v.RawName] = true
+		defer delete(resolving, v.RawName)
+		for i := range defined.Members {
+			if !defined.Members[i].IsInline {
+				continue
+			}
+
+			resolved, err := p.resolveInlineType(defined.Members[i].Type, resolving)
+			if err != nil {
+				return nil, err
+			}
+			defined.Members[i].Type = resolved
+		}
+		return defined, nil
+	case spec.NestedStruct:
+		for i := range v.Members {
+			if !v.Members[i].IsInline {
+				continue
+			}
+
+			resolved, err := p.resolveInlineType(v.Members[i].Type, resolving)
+			if err != nil {
+				return nil, err
+			}
+			v.Members[i].Type = resolved
+		}
+		return v, nil
+	case spec.PointerType:
+		resolved, err := p.resolveInlineType(v.Type, resolving)
+		if err != nil {
+			return nil, err
+		}
+		v.Type = resolved
+		return v, nil
+	default:
+		return tp, nil
+	}
+}
+
 func (p parser) findDefinedType(name string) (*spec.Type, error) {
 	for _, item := range p.spec.Types {
 		if _, ok := item.(spec.DefineStruct); ok {
@@ -147,17 +247,15 @@ func (p parser) findDefinedType(name string) (*spec.Type, error) {
 }
 
 func (p parser) fieldToMember(field *ast.TypeField) spec.Member {
-	name := ""
-	tag := ""
+	var name string
+	var tag string
 	if !field.IsAnonymous {
 		name = field.Name.Text()
-		if field.Tag == nil {
-			panic(fmt.Sprintf("error: line %d:%d field %s has no tag", field.Name.Line(), field.Name.Column(),
-				field.Name.Text()))
+		if field.Tag != nil {
+			tag = field.Tag.Text()
 		}
-
-		tag = field.Tag.Text()
 	}
+
 	return spec.Member{
 		Name:     name,
 		Type:     p.astTypeToSpec(field.DataType),
@@ -173,10 +271,14 @@ func (p parser) astTypeToSpec(in ast.DataType) spec.Type {
 	case *ast.Literal:
 		raw := v.Literal.Text()
 		if api.IsBasicType(raw) {
-			return spec.PrimitiveType{RawName: raw}
+			return spec.PrimitiveType{
+				RawName: raw,
+			}
 		}
 
-		return spec.DefineStruct{RawName: raw}
+		return spec.DefineStruct{
+			RawName: raw,
+		}
 	case *ast.Interface:
 		return spec.InterfaceType{RawName: v.Literal.Text()}
 	case *ast.Map:
@@ -192,12 +294,16 @@ func (p parser) astTypeToSpec(in ast.DataType) spec.Type {
 		return spec.PointerType{RawName: v.PointerExpr.Text(), Type: spec.DefineStruct{RawName: raw}}
 	}
 
-	panic(fmt.Sprintf("unspported type %+v", in))
+	panic(fmt.Sprintf("unsupported type %+v", in))
 }
 
 func (p parser) stringExprs(docs []ast.Expr) []string {
 	var result []string
 	for _, item := range docs {
+		if item == nil {
+			continue
+		}
+
 		result = append(result, item.Text())
 	}
 	return result
@@ -222,9 +328,13 @@ func (p parser) fillService() error {
 				AtServerAnnotation: spec.Annotation{},
 				Method:             astRoute.Route.Method.Text(),
 				Path:               astRoute.Route.Path.Text(),
+				Doc:                p.stringExprs(astRoute.Route.DocExpr),
+				Comment:            p.stringExprs([]ast.Expr{astRoute.Route.CommentExpr}),
 			}
 			if astRoute.AtHandler != nil {
 				route.Handler = astRoute.AtHandler.Name.Text()
+				route.HandlerDoc = append(route.HandlerDoc, p.stringExprs(astRoute.AtHandler.DocExpr)...)
+				route.HandlerComment = append(route.HandlerComment, p.stringExprs([]ast.Expr{astRoute.AtHandler.CommentExpr})...)
 			}
 
 			err := p.fillRouteAtServer(astRoute, &route)
@@ -239,7 +349,7 @@ func (p parser) fillService() error {
 				route.ResponseType = p.astTypeToSpec(astRoute.Route.Reply.Name)
 			}
 			if astRoute.AtDoc != nil {
-				properties := make(map[string]string, 0)
+				properties := make(map[string]string)
 				for _, kv := range astRoute.AtDoc.Kv {
 					properties[kv.Key.Text()] = kv.Value.Text()
 				}
@@ -255,11 +365,12 @@ func (p parser) fillService() error {
 			}
 
 			group.Routes = append(group.Routes, route)
-
 			name := item.ServiceApi.Name.Text()
 			if len(p.spec.Service.Name) > 0 && p.spec.Service.Name != name {
-				return fmt.Errorf("mulit service name defined %s and %s", name, p.spec.Service.Name)
+				return fmt.Errorf("multiple service names defined %s and %s",
+					name, p.spec.Service.Name)
 			}
+
 			p.spec.Service.Name = name
 		}
 		groups = append(groups, group)
@@ -271,7 +382,7 @@ func (p parser) fillService() error {
 
 func (p parser) fillRouteAtServer(astRoute *ast.ServiceRoute, route *spec.Route) error {
 	if astRoute.AtServer != nil {
-		properties := make(map[string]string, 0)
+		properties := make(map[string]string)
 		for _, kv := range astRoute.AtServer.Kv {
 			properties[kv.Key.Text()] = kv.Value.Text()
 		}
@@ -295,7 +406,7 @@ func (p parser) fillRouteAtServer(astRoute *ast.ServiceRoute, route *spec.Route)
 
 func (p parser) fillAtServer(item *ast.Service, group *spec.Group) {
 	if item.AtServer != nil {
-		properties := make(map[string]string, 0)
+		properties := make(map[string]string)
 		for _, kv := range item.AtServer.Kv {
 			properties[kv.Key.Text()] = kv.Value.Text()
 		}

@@ -6,9 +6,9 @@ import (
 	"path"
 	"strings"
 
-	"github.com/tal-tech/go-zero/core/search"
-	"github.com/tal-tech/go-zero/rest/httpx"
-	"github.com/tal-tech/go-zero/rest/internal/context"
+	"github.com/zeromicro/go-zero/core/search"
+	"github.com/zeromicro/go-zero/rest/httpx"
+	"github.com/zeromicro/go-zero/rest/pathvar"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 var (
 	// ErrInvalidMethod is an error that indicates not a valid http method.
 	ErrInvalidMethod = errors.New("not a valid http method")
-	// ErrInvalidPath is an error that indicates path is not start with /.
+	// ErrInvalidPath is an error that indicates path does not start with /.
 	ErrInvalidPath = errors.New("path must begin with '/'")
 )
 
@@ -61,7 +61,7 @@ func (pr *patRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tree, ok := pr.trees[r.Method]; ok {
 		if result, ok := tree.Search(reqPath); ok {
 			if len(result.Params) > 0 {
-				r = context.WithPathVars(r, result.Params)
+				r = pathvar.WithVars(r, result.Params)
 			}
 			result.Item.(http.Handler).ServeHTTP(w, r)
 			return

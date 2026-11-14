@@ -7,12 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tal-tech/go-zero/core/iox"
+	"github.com/zeromicro/go-zero/core/iox"
 )
 
 // PropertyError represents a configuration error message.
 type PropertyError struct {
-	error
 	message string
 }
 
@@ -46,7 +45,7 @@ func LoadProperties(filename string, opts ...Option) (Properties, error) {
 
 	raw := make(map[string]string)
 	for i := range lines {
-		pair := strings.Split(lines[i], "=")
+		pair := strings.SplitN(lines[i], "=", 2)
 		if len(pair) != 2 {
 			// invalid property format
 			return nil, &PropertyError{

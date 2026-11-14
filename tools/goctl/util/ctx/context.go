@@ -4,7 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 
-	"github.com/tal-tech/go-zero/tools/goctl/rpc/execx"
+	"github.com/zeromicro/go-zero/tools/goctl/rpc/execx"
 )
 
 var errModuleCheck = errors.New("the work directory must be found in the go mod or the $GOPATH")
@@ -17,7 +17,7 @@ type ProjectContext struct {
 	// eg: go-zero、greet
 	Name string
 	// Path identifies which module a project belongs to, which is module value if it's a go mod project,
-	// or else it is the root name of the project, eg: github.com/tal-tech/go-zero、greet
+	// or else it is the root name of the project, eg: github.com/zeromicro/go-zero、greet
 	Path string
 	// Dir is the path of the project, eg: /Users/keson/goland/go/go-zero、/Users/keson/go/src/greet
 	Dir string
@@ -27,16 +27,31 @@ type ProjectContext struct {
 // workDir parameter is the directory of the source of generating code,
 // where can be found the project path and the project module,
 func Prepare(workDir string) (*ProjectContext, error) {
+	return PrepareWithModule(workDir, "")
+}
+
+// PrepareWithModule checks the project which module belongs to,and returns the path and module.
+// workDir parameter is the directory of the source of generating code,
+// where can be found the project path and the project module,
+// moduleName parameter is the custom module name to use if creating a new go.mod
+func PrepareWithModule(workDir string, moduleName string) (*ProjectContext, error) {
 	ctx, err := background(workDir)
 	if err == nil {
 		return ctx, nil
 	}
 
-	name := filepath.Base(workDir)
+	var name string
+	if len(moduleName) > 0 {
+		name = moduleName
+	} else {
+		name = filepath.Base(workDir)
+	}
+
 	_, err = execx.Run("go mod init "+name, workDir)
 	if err != nil {
 		return nil, err
 	}
+
 	return background(workDir)
 }
 

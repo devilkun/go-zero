@@ -2,8 +2,11 @@ package stringx
 
 import (
 	"errors"
+	"slices"
+	"strings"
+	"unicode"
 
-	"github.com/tal-tech/go-zero/core/lang"
+	"github.com/zeromicro/go-zero/core/lang"
 )
 
 var (
@@ -14,30 +17,41 @@ var (
 )
 
 // Contains checks if str is in list.
+// Deprecated: use slices.Contains instead.
 func Contains(list []string, str string) bool {
-	for _, each := range list {
-		if each == str {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(list, str)
 }
 
-// Filter filters chars from s with given filter function.
-func Filter(s string, filter func(r rune) bool) string {
-	var n int
-	chars := []rune(s)
-	for i, x := range chars {
-		if n < i {
-			chars[n] = x
+// Filter filters chars from s with given remove function.
+func Filter(s string, remove func(r rune) bool) string {
+	return strings.Map(func(r rune) rune {
+		if remove(r) {
+			return -1
 		}
-		if !filter(x) {
-			n++
-		}
+		return r
+	}, s)
+}
+
+// FirstN returns first n runes from s.
+func FirstN(s string, n int, ellipsis ...string) string {
+	if n < 0 {
+		return ""
 	}
 
-	return string(chars[:n])
+	var i int
+
+	for j := range s {
+		if i == n {
+			ret := s[:j]
+			for _, each := range ellipsis {
+				ret += each
+			}
+			return ret
+		}
+		i++
+	}
+
+	return s
 }
 
 // HasEmpty checks if there are empty strings in args.
@@ -49,6 +63,33 @@ func HasEmpty(args ...string) bool {
 	}
 
 	return false
+}
+
+// Join joins any number of elements into a single string, separating them with given sep.
+// Empty elements are ignored. However, if the argument list is empty or all its elements are empty,
+// Join returns an empty string.
+func Join(sep byte, elem ...string) string {
+	var size int
+	for _, e := range elem {
+		size += len(e)
+	}
+	if size == 0 {
+		return ""
+	}
+
+	buf := make([]byte, 0, size+len(elem)-1)
+	for _, e := range elem {
+		if len(e) == 0 {
+			continue
+		}
+
+		if len(buf) > 0 {
+			buf = append(buf, sep)
+		}
+		buf = append(buf, e...)
+	}
+
+	return string(buf)
 }
 
 // NotEmpty checks if all strings are not empty in args.
@@ -77,16 +118,13 @@ func Remove(strings []string, strs ...string) []string {
 // Reverse reverses s.
 func Reverse(s string) string {
 	runes := []rune(s)
-
-	for from, to := 0, len(runes)-1; from < to; from, to = from+1, to-1 {
-		runes[from], runes[to] = runes[to], runes[from]
-	}
-
+	slices.Reverse(runes)
 	return string(runes)
 }
 
-// Substr returns runes between start and stop [start, stop) regardless of the chars are ascii or utf8.
-func Substr(str string, start int, stop int) (string, error) {
+// Substr returns runes between start and stop [start, stop)
+// regardless of the chars are ascii or utf8.
+func Substr(str string, start, stop int) (string, error) {
 	rs := []rune(str)
 	length := len(rs)
 
@@ -94,7 +132,7 @@ func Substr(str string, start int, stop int) (string, error) {
 		return "", ErrInvalidStartPosition
 	}
 
-	if stop < 0 || stop > length {
+	if stop < 0 || stop > length || start > stop {
 		return "", ErrInvalidStopPosition
 	}
 
@@ -102,6 +140,7 @@ func Substr(str string, start int, stop int) (string, error) {
 }
 
 // TakeOne returns valid string if not empty or later one.
+// Deprecated: use cmp.Or instead.
 func TakeOne(valid, or string) string {
 	if len(valid) > 0 {
 		return valid
@@ -117,6 +156,15 @@ func TakeWithPriority(fns ...func() string) string {
 		if len(val) > 0 {
 			return val
 		}
+	}
+
+	return ""
+}
+
+// ToCamelCase returns the string that converts the first letter to lowercase.
+func ToCamelCase(s string) string {
+	for i, v := range s {
+		return string(unicode.ToLower(v)) + s[i+1:]
 	}
 
 	return ""
